@@ -1,7 +1,153 @@
-pncd-campo-offline/
-├── index.html          # Tela principal (Cadastro, Mapa, Resumo Diário/Semanal, Sincronização)
-├── manifest.json       # Configuração para instalar como app no celular
-├── sw.js               # Service Worker (cache offline dos arquivos e mapa)
-├── db.js               # Banco local (IndexedDB), cálculo de Ciclo (1 a 6) e Semana Epidemiológica (SE)
-├── map.js              # Mapa offline + GPS + marcadores dos imóveis locais
-└── app.js              # Lógica dos formulários, resumos diário/semanal e sincronização
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#1b5e20">
+  <title>PNCD Campo — Pastos Bons</title>
+  <link rel="manifest" href="./manifest.json">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <style>
+    * { box-sizing: border-box; font-family: system-ui, -apple-system, sans-serif; }
+    body { margin: 0; background: #f4f6f8; color: #1f2933; }
+    header { background: #1b5e20; color: #fff; padding: 14px 16px; display: flex; justify-content: space-between; align-items: center; }
+    header h1 { margin: 0; font-size: 1.1rem; }
+    .badge { background: rgba(255,255,255,0.2); padding: 4px 10px; border-radius: 12px; font-size: 0.8rem; }
+    nav { display: flex; background: #2e7d32; }
+    nav button { flex: 1; background: none; border: none; color: #e8f5e9; padding: 12px 8px; font-weight: 600; cursor: pointer; border-bottom: 3px solid transparent; }
+    nav button.active { color: #fff; border-bottom-color: #ffeb3b; background: rgba(0,0,0,0.1); }
+    main { padding: 16px; max-width: 720px; margin: 0 auto; }
+    .tab { display: none; }
+    .tab.active { display: block; }
+    .card { background: #fff; border-radius: 8px; padding: 16px; margin-bottom: 14px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+    label { display: block; font-size: 0.85rem; font-weight: 600; margin: 10px 0 4px; }
+    input, select, textarea { width: 100%; padding: 10px; border: 1px solid #cbd2d9; border-radius: 6px; font-size: 0.95rem; }
+    .row { display: flex; gap: 10px; }
+    .row > div { flex: 1; }
+    .btn { width: 100%; padding: 12px; border: none; border-radius: 6px; font-size: 1rem; font-weight: 600; cursor: pointer; margin-top: 12px; }
+    .btn-primary { background: #1b5e20; color: #fff; }
+    .btn-secondary { background: #0277bd; color: #fff; }
+    #mapa { height: 360px; border-radius: 8px; width: 100%; }
+    .kpi-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-top: 10px; }
+    .kpi { background: #e8f5e9; padding: 12px; border-radius: 6px; text-align: center; }
+    .kpi strong { display: block; font-size: 1.4rem; color: #1b5e20; }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>PNCD Campo — Pastos Bons</h1>
+      <small id="info-ciclo">Carregando ciclo e SE...</small>
+    </div>
+    <span id="status-rede" class="badge">Verificando...</span>
+  </header>
+
+  <nav>
+    <button class="active" data-tab="tab-cadastro">1. Cadastro</button>
+    <button data-tab="tab-mapa">2. Mapa Offline</button>
+    <button data-tab="tab-resumo">3. Resumos / Sync</button>
+  </nav>
+
+  <main>
+    <section id="tab-cadastro" class="tab active">
+      <form id="form-visita" class="card">
+        <div class="row">
+          <div>
+            <label for="data-visita">Data da Visita</label>
+            <input type="date" id="data-visita" required>
+          </div>
+          <div>
+            <label for="bairro">Bairro / Localidade</label>
+            <input type="text" id="bairro" placeholder="Ex.: Centro, São José" required>
+          </div>
+        </div>
+        <div class="row">
+          <div>
+            <label for="quarteirao">Nº Quarteirão</label>
+            <input type="text" id="quarteirao" placeholder="Ex.: Q-12" required>
+          </div>
+          <div>
+            <label for="imovel">Nº Imóvel / Sequência</label>
+            <input type="text" id="imovel" placeholder="Ex.: 045" required>
+          </div>
+        </div>
+        <div class="row">
+          <div>
+            <label for="tipo-imovel">Tipo de Imóvel</label>
+            <select id="tipo-imovel">
+              <option value="R">R - Residencial</option>
+              <option value="C">C - Comércio</option>
+              <option value="TB">TB - Terreno Baldio</option>
+              <option value="PE">PE - Ponto Estratégico</option>
+              <option value="O">O - Outros</option>
+            </select>
+          </div>
+          <div>
+            <label for="situacao">Situação</label>
+            <select id="situacao">
+              <option value="Inspecionado">Inspecionado</option>
+              <option value="Fechado">Fechado</option>
+              <option value="Recusado">Recusado</option>
+              <option value="Tratado">Inspecionado e Tratado</option>
+            </select>
+          </div>
+        </div>
+        <div class="row">
+          <div>
+            <label for="depositos">Depósitos Inspecionados</label>
+            <input type="number" id="depositos" min="0" value="0">
+          </div>
+          <div>
+            <label for="focos">Focos Positivos</label>
+            <input type="number" id="focos" min="0" value="0">
+          </div>
+        </div>
+        <label for="observacao">Observações / Larvicida</label>
+        <textarea id="observacao" rows="2" placeholder="Opcional"></textarea>
+        <div class="row">
+          <div>
+            <label for="lat">Latitude</label>
+            <input type="text" id="lat" readonly placeholder="Sem GPS">
+          </div>
+          <div>
+            <label for="lng">Longitude</label>
+            <input type="text" id="lng" readonly placeholder="Sem GPS">
+          </div>
+        </div>
+        <button type="button" id="btn-gps" class="btn btn-secondary">Capturar GPS</button>
+        <button type="submit" class="btn btn-primary">Salvar Localmente</button>
+      </form>
+    </section>
+
+    <section id="tab-mapa" class="tab">
+      <div class="card">
+        <div id="mapa"></div>
+      </div>
+    </section>
+
+    <section id="tab-resumo" class="tab">
+      <div class="card">
+        <h3 style="margin-top:0">Resumo Diário e Semanal</h3>
+        <div class="kpi-grid">
+          <div class="kpi"><strong id="kpi-hoje">0</strong>Visitas Hoje</div>
+          <div class="kpi"><strong id="kpi-se">0</strong>Visitas na SE</div>
+          <div class="kpi"><strong id="kpi-focos">0</strong>Focos na SE</div>
+          <div class="kpi"><strong id="kpi-pendentes">0</strong>Pendentes Sync</div>
+        </div>
+        <button type="button" id="btn-sync" class="btn btn-primary">Sincronizar Pendentes Agora</button>
+      </div>
+    </section>
+  </main>
+
+  <script src="https://unpkg.com/dexie@4.0.8/dist/dexie.min.js"></script>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="./db.js"></script>
+  <script src="./map.js"></script>
+  <script src="./app.js"></script>
+  <script>
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("./sw.js").catch(console.error);
+    }
+  </script>
+</body>
+</html>
